@@ -1,44 +1,105 @@
-import express from 'express';
-import dotenv from 'dotenv';
-import fetch from 'node-fetch';
-import cors from 'cors';
-import { OpenAI } from 'openai';
+import https from "https";
+import fs from "fs";
+import express from "express";
+import dotenv from "dotenv";
+import fetch from "node-fetch";
+import cors from "cors";
+import { OpenAI } from "openai";
+import cookieParser from "cookie-parser";
 
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 dotenv.config();
 const app = express();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-app.use(cors());
+app.use(cookieParser());
+
+app.use(
+  cors({
+    origin: "https://tuasistentemigratorio.app",
+    credentials: true,
+  })
+);
+
 app.use(express.json());
 
-app.post('/ask', async (req, res) => {
-    const { question } = req.body;
-    if (!question) return res.status(400).json({ error: 'Question is required' });
+const usage = new Map();
 
-    try {
-        // Step 1: Query AutoRAG
-        const autoragResponse = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/vectorize/auto-rag/indexes/${process.env.R2_AUTORAG_INDEX_ID}/query`,
-            {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ query: question }),
-            }
-        );
+const QUESTION_LIMIT = 10;
 
-        const { result } = await autoragResponse.json();
+function getToday() {
+  return new Date().toISOString().slice(0, 10); // e.g., "2025-06-11"
+}
 
-        const context = result?.context || '';
+app.use((req, res, next) => {
+  let userId = req.cookies.user_id;
 
-        // Step 2: Ask GPT with the returned context
-        const chatResponse = await openai.chat.completions.create({
-            model: 'gpt-3.5-turbo-0125',
-            messages: [
-                {
-                    role: 'system',
-                    content: `
+  if (!userId) {
+    userId = `${getToday()}-${Math.random()}`;
+    res.cookie("user_id", userId, {
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 1 week
+      httpOnly: true,
+      sameSite: "none",
+      secure: true,
+    });
+  }
+
+  const today = getToday();
+
+  // Create or update user usage record
+  const existing = usage.get(userId);
+
+  if (!existing) {
+    usage.set(userId, { date: today, count: 0 });
+  } else if (existing.date !== today) {
+    // Reset daily count
+    usage.set(userId, { date: today, count: 0 });
+  }
+
+  if (existing != null) {
+    if (existing.count >= QUESTION_LIMIT) {
+      return res
+        .status(429)
+        .json({ message: "Daily limit reached. Come back tomorrow." });
+    }
+  }
+
+  req.userId = userId;
+  next();
+});
+
+app.post("/ask", async (req, res) => {
+  const userId = req.userId;
+  const userData = usage.get(userId);
+  const { question } = req.body;
+
+  userData.count += 1;
+
+  if (!question) return res.status(400).json({ error: "Question is required" });
+
+  try {
+    // Step 1: Query AutoRAG
+    const autoragResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/vectorize/auto-rag/indexes/${process.env.R2_AUTORAG_INDEX_ID}/query`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query: question }),
+      }
+    );
+
+    const { result } = await autoragResponse.json();
+
+    const context = result?.context || "";
+
+    // Step 2: Ask GPT with the returned context
+    const chatResponse = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo-0125",
+      messages: [
+        {
+          role: "system",
+          content: `
                                You are an immigration advisor specializing in helping people from developing countries (such as the Dominican Republic, Haiti, Honduras, Nigeria, etc.) prepare for U.S. visa applications and consular interviews.
 
                                 Your job is to provide helpful, practical, and culturally relevant guidance to:
@@ -55,20 +116,36 @@ app.post('/ask', async (req, res) => {
 
                                 Always respond with empathy, clarity, and encouragement. Use simple, direct language — avoid legal jargon unless specifically asked.
 `,
-                },
-                {
-                    role: 'user',
-                    content: `Context:\n${context}\n\nQuestion:\n${question}`,
-                },
-            ],
-        });
+        },
+        {
+          role: "user",
+          content: `Context:\n${context}\n\nQuestion:\n${question}`,
+        },
+      ],
+    });
 
-        const answer = chatResponse.choices[0].message.content;
-        res.json({ answer });
-    } catch (err) {
-        console.error('Error:', err);
-        res.status(500).json({ error: 'Something went wrong.' });
-    }
+    const answer = chatResponse.choices[0].message.content;
+
+    res.json({
+      answer,
+      questionsLeftToday: QUESTION_LIMIT - userData.count,
+    });
+  } catch (err) {
+    console.error("Error:", err);
+    res.status(500).json({ error: "Something went wrong." });
+  }
 });
 
-app.listen(4000, () => console.log('Server running at http://localhost:4000'));
+https
+  .createServer(
+    {
+      key: fs.readFileSync("./cert/key.pem"),
+      cert: fs.readFileSync("./cert/cert.pem"),
+    },
+    app
+  )
+  .listen(8443, () => {
+    console.log("Express HTTPS server running at https://localhost:8443");
+  });
+
+// app.listen(5000, () => console.log("Server running at http://localhost:5000"));
