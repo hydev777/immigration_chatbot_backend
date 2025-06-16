@@ -1,14 +1,14 @@
 import https from "https";
-import fs from "fs";
-import express from "express";
-import dotenv from "dotenv";
-import fetch from "node-fetch";
-import cors from "cors";
-import { OpenAI } from "openai";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import cookieParser from "cookie-parser";
+import express from "express";
+import cors from "cors";
+import fs from "fs";
+import dotenv from "dotenv";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import { usage } from "./core/storage.js";
+import { QUESTION_LIMIT } from './core/globals.js';
+import { getAnswerQuestion } from "./features/answer/answer_controller.js";
+
 dotenv.config();
 const app = express();
 app.use(cookieParser());
@@ -21,10 +21,6 @@ app.use(
 );
 
 app.use(express.json());
-
-const usage = new Map();
-
-const QUESTION_LIMIT = 10;
 
 function getToday() {
   return new Date().toISOString().slice(0, 10); // e.g., "2025-06-11"
@@ -67,94 +63,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.post("/ask", async (req, res) => {
-  const userId = req.userId;
-  const userData = usage.get(userId);
-  const { question } = req.body;
-
-  userData.count += 1;
-
-  if (!question) return res.status(400).json({ error: "Question is required" });
-
-  try {
-    // Step 1: Query AutoRAG
-    const autoragResponse = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/vectorize/auto-rag/indexes/${process.env.R2_AUTORAG_INDEX_ID}/query`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ query: question }),
-      }
-    );
-
-    const { result } = await autoragResponse.json();
-
-    const context = result?.context || "";
-
-    const today = new Date();
-    const dayOfMonth = today.getDate();
-
-    let answer = "";
-
-    const SYSTEM_PROMPT = `
-    You are an immigration advisor specializing in helping people from developing countries (such as the Dominican Republic, Haiti, Honduras, Nigeria, etc.) prepare for U.S. visa applications and consular interviews.
-
-    Your job is to provide helpful, practical, and culturally relevant guidance to:
-
-    - Increase their chances of getting a visa.
-    - Avoid common mistakes during visa interviews.
-    - Prepare with confidence, even if they have limited financial resources.
-    - Understand what U.S. consular officers look for.
-    - Explain the most common reasons visas are denied — and how to avoid them.
-    - Advise on whether to apply as an individual or as part of a family or group.
-    - Give recommendations based on real-life scenarios and user concerns.
-
-    You have access to a knowledge base that includes articles, tips from former consular officers, lawyer advice, common interview questions, rejected and approved case stories, and step-by-step visa guides.
-
-    Always respond with empathy, clarity, and encouragement. Use simple, direct language — avoid legal jargon unless specifically asked.
-    `;
-
-    if (dayOfMonth < 15) {
-      const chatResponse = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo-0125",
-        messages: [
-          {
-            role: "system",
-            content: SYSTEM_PROMPT,
-          },
-          {
-            role: "user",
-            content: `Context:\n${context}\n\nQuestion:\n${question}`,
-          },
-        ],
-      });
-
-      answer = chatResponse.choices[0].message.content;
-    } else {
-      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-      const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-
-      const result = await model.generateContent([
-        SYSTEM_PROMPT,
-        `Context:\n${context}\n\nQuestion:\n${question}`,
-      ]);
-
-      const response = result.response;
-      answer = response.text();
-    }
-
-    res.json({
-      answer,
-      questionsLeftToday: QUESTION_LIMIT - userData.count,
-    });
-  } catch (err) {
-    console.error("Error:", err);
-    res.status(500).json({ error: "Something went wrong." });
-  }
-});
+app.post("/ask", getAnswerQuestion);
 
 https
   .createServer(
