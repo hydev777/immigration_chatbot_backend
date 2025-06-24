@@ -2,12 +2,16 @@ import fetch from "node-fetch";
 import { OpenAI } from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { usage } from "../../core/storage.js";
-import { QUESTION_LIMIT } from '../../core/globals.js';
+import { QUESTION_LIMIT } from "../../core/globals.js";
 import { storeQuestion } from "./answer_repository.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const genAI = new GoogleGenerativeAI("AIzaSyAd1Wwo2HSIcoiZ0zNnHqQMukCLKsDMrXE");
-// const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const deepseekApiKey = "sk-f6b7b3c7a9a84fcf9c6c5864fa18afbf";
+const mistral = new OpenAI({
+  apiKey: "pKebj8o8H4QnVymzrbUVjLKY4kwomPwx",
+  baseURL: "https://api.mistral.ai",
+});
 
 export const getAnswerQuestion = async (req, res) => {
   const userId = req.userId;
@@ -59,7 +63,7 @@ export const getAnswerQuestion = async (req, res) => {
       Always respond with empathy, clarity, and encouragement. Use simple, direct language — avoid legal jargon unless specifically asked.
       `;
 
-    if (dayOfMonth < 15) {
+    if (dayOfMonth <= 8) {
       const chatResponse = await openai.chat.completions.create({
         model: "gpt-3.5-turbo-0125",
         messages: [
@@ -75,7 +79,7 @@ export const getAnswerQuestion = async (req, res) => {
       });
 
       answer = chatResponse.choices[0].message.content;
-    } else {
+    } else if (dayOfMonth <= 16) {
       const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
 
       const result = await model.generateContent([
@@ -85,6 +89,44 @@ export const getAnswerQuestion = async (req, res) => {
 
       const response = result.response;
       answer = response.text();
+    } else if (dayOfMonth <= 24) {
+      const deepseekResponse = await fetch(
+        "https://api.deepseek.com/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${deepseekApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "deepseek-chat",
+            messages: [
+              { role: "system", content: SYSTEM_PROMPT },
+              {
+                role: "user",
+                content: `Context:\n${context}\n\nQuestion:\n${question}`,
+              },
+            ],
+          }),
+        }
+      );
+
+      const deepseekData = await deepseekResponse.json();
+      answer =
+        deepseekData.choices?.[0]?.message?.content || "No answer received";
+    } else {
+      const mistralResponse = await mistral.chat.completions.create({
+        model: "ministral-8b-latest",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Context:\n${context}\n\nQuestion:\n${question}`,
+          },
+        ],
+      });
+
+      answer = mistralResponse.choices[0].message.content;
     }
 
     storeQuestion(question);
