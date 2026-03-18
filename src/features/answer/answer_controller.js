@@ -6,10 +6,10 @@ import { QUESTION_LIMIT } from "../../core/globals.js";
 import { storeQuestion } from "./answer_repository.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const genAI = new GoogleGenerativeAI("AIzaSyAd1Wwo2HSIcoiZ0zNnHqQMukCLKsDMrXE");
-const deepseekApiKey = "sk-f6b7b3c7a9a84fcf9c6c5864fa18afbf";
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
 const mistral = new OpenAI({
-  apiKey: "pKebj8o8H4QnVymzrbUVjLKY4kwomPwx",
+  apiKey: process.env.MISTRAL_API_KEY,
   baseURL: "https://api.mistral.ai",
 });
 

@@ -52,6 +52,8 @@ This project is a Node.js/Express backend that powers an immigration-focused cha
    # AI providers
    GOOGLE_API_KEY=your_google_generative_ai_key
    OPENAI_API_KEY=your_openai_api_key
+   DEEPSEEK_API_KEY=your_deepseek_api_key
+   MISTRAL_API_KEY=your_mistral_api_key
    ```
 
    Adjust variable names to match those used in `src/core/config/sql_config.js` and any environment reads in the codebase.
